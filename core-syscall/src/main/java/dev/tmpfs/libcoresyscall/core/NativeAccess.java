@@ -34,9 +34,10 @@ public class NativeAccess {
      * The size of a single argument must fit in the word size of the platform, aka. uintptr_t.
      *
      * @param function the function pointer
-     * @param args     the arguments, support up to 4 arguments
+     * @param args     the arguments, support up to 15 arguments
      * @return the result of the function
      */
+    @SuppressWarnings("OverlyLongMethod")
     public static long callPointerFunction(long function, long... args) {
         if (function == 0) {
             throw new IllegalArgumentException("function is null");
@@ -52,6 +53,28 @@ public class NativeAccess {
                 return NativeBridge.nativeCallPointerFunction3(function, args[0], args[1], args[2]);
             case 4:
                 return NativeBridge.nativeCallPointerFunction4(function, args[0], args[1], args[2], args[3]);
+            case 5:
+                return NativeBridge.nativeCallPointerFunction5(function, args[0], args[1], args[2], args[3], args[4]);
+            case 6:
+                return NativeBridge.nativeCallPointerFunction6(function, args[0], args[1], args[2], args[3], args[4], args[5]);
+            case 7:
+                return NativeBridge.nativeCallPointerFunction7(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+            case 8:
+                return NativeBridge.nativeCallPointerFunction8(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+            case 9:
+                return NativeBridge.nativeCallPointerFunction9(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
+            case 10:
+                return NativeBridge.nativeCallPointerFunction10(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]);
+            case 11:
+                return NativeBridge.nativeCallPointerFunction11(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]);
+            case 12:
+                return NativeBridge.nativeCallPointerFunction12(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]);
+            case 13:
+                return NativeBridge.nativeCallPointerFunction13(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]);
+            case 14:
+                return NativeBridge.nativeCallPointerFunction14(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]);
+            case 15:
+                return NativeBridge.nativeCallPointerFunction15(function, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]);
             default:
                 throw new AssertionError("Unsupported argument count: " + args.length);
         }

@@ -141,6 +141,63 @@ public class ShellcodeImpl_Arm32 extends BaseShellcode implements ISimpleInlineH
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    /**
+     * Generate ARM32 (ARM mode) shellcode for nativeCallPointerFunctionN with N arguments (N >= 5).
+     *
+     * On ARM32 AAPCS (JNI entry):
+     *   r0 = env, r1 = clazz, r2-r3 = func (jlong, register pair, low in r2)
+     *   [sp+0..7] = arg1 (jlong), [sp+8..15] = arg2, ...
+     * Each jlong arg occupies 8 bytes on the stack.
+     *
+     * The target function expects void* args (each 32-bit):
+     *   r0 = arg1 (low 32-bit), r1 = arg2, r2 = arg3, r3 = arg4
+     *   [sp] = arg5 (32-bit), [sp+4] = arg6, ...
+     */
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        // mov ip, r2 (1) + ldr r[0..3] from stack (4) + shuffle + bx ip (1)
+        int instCount = 6; // mov ip,r2; ldr r0,[sp]; ldr r1,[sp,#8]; ldr r2,[sp,#16]; ldr r3,[sp,#24]; bx ip
+        if (n > 4) instCount += (n - 4) * 2; // ldr+str per extra arg (arg5..argN)
+        int[] insns = new int[instCount];
+        int i = 0;
+
+        // mov ip(12), r2 — save function pointer low word
+        insns[i++] = 0xE1A0C002;
+        // Load first 4 args from JNI stack to target registers (each jlong arg = 8 bytes on stack)
+        insns[i++] = 0xE59D0000;          // ldr r0, [sp]         — arg1 low word
+        insns[i++] = 0xE59D1008;          // ldr r1, [sp, #8]     — arg2 low word
+        insns[i++] = 0xE59D2010;          // ldr r2, [sp, #16]    — arg3 low word
+        insns[i++] = 0xE59D3018;          // ldr r3, [sp, #24]    — arg4 low word
+        // Shuffle extra args: argK (K=5..N) from JNI stack to target stack positions
+        // JNI: argK low word at [sp + (K-1)*8]
+        // Target: argK at [sp + (K-5)*4]
+        for (int k = 5; k <= n; k++) {
+            int srcOff = (k - 1) * 8; // JNI offset for argK low word
+            int dstOff = (k - 5) * 4; // Target stack offset
+            insns[i++] = 0xE59D4000 | srcOff; // ldr r4, [sp, #srcOff]
+            insns[i++] = 0xE58D4000 | dstOff; // str r4, [sp, #dstOff]
+        }
+        // bx ip — call function (ip=R12, func ptr low word)
+        insns[i++] = 0xE12FFF1C;
+
+        byte[] result = new byte[insns.length * 4];
+        for (int j = 0; j < insns.length; j++) {
+            int insn = insns[j];
+            int off = j * 4;
+            result[off] = (byte) (insn & 0xFF);
+            result[off + 1] = (byte) ((insn >> 8) & 0xFF);
+            result[off + 2] = (byte) ((insn >> 16) & 0xFF);
+            result[off + 3] = (byte) (insn >>> 24);
+        }
+        return result;
+    }
+
+    @Override
     public int getNativeGetJavaVmOffset() {
         return 0x0164;
     }

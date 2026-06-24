@@ -138,6 +138,80 @@ public class ShellcodeImpl_X86 extends BaseShellcode implements ISimpleInlineHoo
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    /**
+     * Generate X86 (32-bit cdecl) shellcode for nativeCallPointerFunctionN with N arguments (N >= 5).
+     *
+     * On X86 cdecl (JNI entry, all args on stack):
+     *   [esp+0] = return addr
+     *   [esp+4] = env, [esp+8] = clazz, [esp+12] = func_low, [esp+16] = func_high
+     *   [esp+20] = arg1_low, [esp+24] = arg1_high, [esp+28] = arg2_low, ...
+     * Each jlong arg is 8 bytes on the stack (low word at lower address, x86 LE).
+     *
+     * The target function (cdecl) expects void* args (each 32-bit):
+     *   [esp+4] = arg1, [esp+8] = arg2, ..., [esp+4*K] = argK
+     */
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        // Pre-compute total size
+        int size = 0;
+        size += 4; // mov edx, [esp+12]
+        for (int k = 1; k <= n; k++) {
+            int loadDisp = 12 + 8 * k; // JNI offset for argK low word
+            size += (loadDisp < 128) ? 5 : 7; // load eax from JNI stack
+            size += 5; // store eax to target stack (always byte disp)
+        }
+        size += 2; // jmp edx
+        byte[] code = new byte[size];
+        int off = 0;
+
+        // mov edx, [esp+12] — save function pointer low word (jlong low word)
+        code[off++] = (byte) 0x8B;
+        code[off++] = 0x54;
+        code[off++] = 0x24;
+        code[off++] = 0x0C; // disp = 12
+
+        // For each arg K=1..N: load low word from JNI stack, store to target stack
+        for (int k = 1; k <= n; k++) {
+            int loadDisp = 12 + 8 * k; // JNI: argK low word at [esp + 12 + 8*K]
+            int storeDisp = 4 * k;     // Target: argK at [esp + 4*K]
+
+            // mov eax, [esp + loadDisp]
+            if (loadDisp < 128) {
+                code[off++] = (byte) 0x8B;
+                code[off++] = 0x44;
+                code[off++] = 0x24;
+                code[off++] = (byte) loadDisp;
+            } else {
+                // Not expected for K <= 14 (max = 12+8*14 = 124 < 128)
+                // For K = 15: loadDisp = 132 = 0x84, needs 32-bit displacement
+                code[off++] = (byte) 0x8B;
+                code[off++] = (byte) 0x84;
+                code[off++] = 0x24;
+                code[off++] = (byte) (loadDisp & 0xFF);
+                code[off++] = (byte) ((loadDisp >> 8) & 0xFF);
+                code[off++] = (byte) ((loadDisp >> 16) & 0xFF);
+                code[off++] = (byte) ((loadDisp >> 24) & 0xFF);
+            }
+
+            // mov [esp + storeDisp], eax
+            code[off++] = (byte) 0x89;
+            code[off++] = 0x44;
+            code[off++] = 0x24;
+            code[off++] = (byte) storeDisp;
+        }
+
+        // jmp edx — call function (preserves return address on stack)
+        code[off++] = (byte) 0xFF;
+        code[off++] = (byte) 0xE2;
+        return code;
+    }
+
+    @Override
     public int getNativeGetJavaVmOffset() {
         return 0x01b0;
     }

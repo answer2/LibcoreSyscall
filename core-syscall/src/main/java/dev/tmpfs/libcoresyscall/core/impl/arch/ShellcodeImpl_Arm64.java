@@ -130,6 +130,58 @@ public class ShellcodeImpl_Arm64 extends BaseShellcode implements ISimpleInlineH
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        // Compute instruction count
+        int instCount = 7; // mov x16,x2; mov x0,x3; mov x1,x4; mov x2,x5; mov x3,x6; mov x4,x7; br x16
+        if (n >= 6) instCount++; // ldr x5, [sp]
+        if (n >= 7) instCount++; // ldr x6, [sp, #8]
+        if (n >= 8) instCount++; // ldr x7, [sp, #16]
+        if (n > 8) instCount += (n - 8) * 2; // ldr+str pairs for arg9..argN
+        int[] insns = new int[instCount];
+        int i = 0;
+        // mov x16, x2 — save function pointer (IP0, preserved by target callee)
+        insns[i++] = 0xAA0003E0 | (2 << 16) | 16;
+        // mov x0, x3 .. mov x4, x7 — shuffle register args to target positions
+        insns[i++] = 0xAA0003E0 | (3 << 16) | 0; // arg1 → x0
+        insns[i++] = 0xAA0003E0 | (4 << 16) | 1; // arg2 → x1
+        insns[i++] = 0xAA0003E0 | (5 << 16) | 2; // arg3 → x2
+        insns[i++] = 0xAA0003E0 | (6 << 16) | 3; // arg4 → x3
+        insns[i++] = 0xAA0003E0 | (7 << 16) | 4; // arg5 → x4
+        // Load stack-based register args (arg6..arg8) from JNI stack
+        if (n >= 6) insns[i++] = 0xF94003E0 | (0 << 10) | 5;  // arg6: ldr x5, [sp]
+        if (n >= 7) insns[i++] = 0xF94003E0 | (1 << 10) | 6;  // arg7: ldr x6, [sp, #8]
+        if (n >= 8) insns[i++] = 0xF94003E0 | (2 << 10) | 7;  // arg8: ldr x7, [sp, #16]
+        // Extra stack args (arg9..argN): overwrite consumed stack slots
+        // JNI layout: [sp]=arg6, [sp+8]=arg7, [sp+16]=arg8, [sp+24]=arg9, ...
+        // Target layout: [sp]=arg9, [sp+8]=arg10, ... (slots arg6-8 are already in x5-x7)
+        for (int k = 9; k <= n; k++) {
+            int srcPimm = k - 6; // source offset in JNI frame (argK at [sp + (k-6)*8])
+            int dstPimm = k - 9; // target offset (argK at [sp + (k-9)*8], overwriting consumed slot)
+            insns[i++] = 0xF94003E0 | (srcPimm << 10) | 17; // ldr x17, [sp, srcPimm*8]
+            insns[i++] = 0xF90003E0 | (dstPimm << 10) | 17; // str x17, [sp, dstPimm*8]
+        }
+        // br x16 — branch to function (LR preserved → JNI return path)
+        insns[i++] = 0xD61F0000 | (16 << 5);
+        // Encode little-endian
+        byte[] result = new byte[insns.length * 4];
+        for (int j = 0; j < insns.length; j++) {
+            int insn = insns[j];
+            int off = j * 4;
+            result[off] = (byte) (insn & 0xFF);
+            result[off + 1] = (byte) ((insn >> 8) & 0xFF);
+            result[off + 2] = (byte) ((insn >> 16) & 0xFF);
+            result[off + 3] = (byte) (insn >>> 24);
+        }
+        return result;
+    }
+
+    @Override
     public int getNativeGetJavaVmOffset() {
         return 0x0164;
     }

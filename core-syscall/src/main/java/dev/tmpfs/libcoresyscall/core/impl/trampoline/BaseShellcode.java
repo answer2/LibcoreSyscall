@@ -52,6 +52,44 @@ public abstract class BaseShellcode {
     public abstract byte[] getShellcodeBytes();
 
     /**
+     * Get the maximum number of arguments supported by the generated callPointerFunction shellcode.
+     * Default is 4 (no dynamic entries). Architecture-specific implementations should override
+     * to return 15 when they implement generateCallPointerFunctionNCode().
+     *
+     * @return the maximum N for nativeCallPointerFunctionN
+     */
+    public int getMaxCallPointerFunctionN() {
+        return 4;
+    }
+
+    /**
+     * Generate shellcode bytes for nativeCallPointerFunctionN with N arguments.
+     * This is called for N from 5 to getMaxCallPointerFunctionN().
+     * The generated code is appended to the trampoline page.
+     *
+     * @param n the number of arguments (5..getMaxCallPointerFunctionN())
+     * @return the generated shellcode bytes
+     */
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        throw new UnsupportedOperationException(
+                "generateCallPointerFunctionNCode not supported for N=" + n
+                        + " on this architecture");
+    }
+
+    /**
+     * Build the parameter types array for nativeCallPointerFunctionN reflection lookup.
+     */
+    @NonNull
+    private static Class<?>[] buildCallPointerFunctionParamTypes(int n) {
+        Class<?>[] paramTypes = new Class<?>[n + 1]; // function + n args
+        paramTypes[0] = long.class;
+        for (int i = 1; i <= n; i++) {
+            paramTypes[i] = long.class;
+        }
+        return paramTypes;
+    }
+
+    /**
      * Get the ashmem dev_t id. If /dev/ashmem is not available, return 0.
      *
      * @return the ashmem dev_t id.
@@ -62,10 +100,8 @@ public abstract class BaseShellcode {
             statAshmem = Os.stat("/dev/ashmem");
         } catch (ErrnoException e) {
             if (e.errno == OsConstants.ENOENT) {
-                // fine, ashmem is not available
                 return 0;
             } else {
-                // something wired?
                 throw ReflectHelper.unsafeThrow(e);
             }
         }
@@ -92,18 +128,6 @@ public abstract class BaseShellcode {
     }
 
     protected void fillInHookInfo(@NonNull byte[] shellcode, int offset) {
-        //struct HookInfo {
-        //    // dev_t for ashmem
-        //    uint64_t ashmem_dev_v;
-        //    union {
-        //        int* (* fn_dl_errno)();
-        //        uint64_t _padding_1;
-        //    };
-        //    union {
-        //        size_t page_size;
-        //        uint64_t _padding_2;
-        //    };
-        //};
         ByteArrayUtils.writeInt64(shellcode, offset, getAshmemDeviceId());
         ByteArrayUtils.writeInt64(shellcode, offset + 8, getDlErrnoFunctionAddress());
         ByteArrayUtils.writeInt64(shellcode, offset + 16, NativeBridge.getPageSize());
@@ -118,8 +142,8 @@ public abstract class BaseShellcode {
         byte[] trampolinePage = new byte[pageSize];
         System.arraycopy(shellcodeBytes, 0, trampolinePage, 0, shellcodeBytes.length);
         HashMap<Method, Integer> nativeEntryOffsetMap = new HashMap<>();
-        // collect all native method offsets used in NativeBridge.class
         try {
+            // Register fixed methods (nativeSyscall, nativeClearCache, nativeGetJavaVM)
             nativeEntryOffsetMap.put(
                     NativeBridge.class.getMethod("nativeSyscall",
                             int.class, long.class, long.class, long.class, long.class, long.class, long.class),
@@ -128,25 +152,53 @@ public abstract class BaseShellcode {
                     NativeBridge.class.getMethod("nativeClearCache", long.class, long.class),
                     getNativeClearCacheOffset());
             nativeEntryOffsetMap.put(
-                    NativeBridge.class.getMethod("nativeCallPointerFunction0", long.class),
-                    getNativeCallPointerFunction0Offset());
-            nativeEntryOffsetMap.put(
-                    NativeBridge.class.getMethod("nativeCallPointerFunction1", long.class, long.class),
-                    getNativeCallPointerFunction1Offset());
-            nativeEntryOffsetMap.put(
-                    NativeBridge.class.getMethod("nativeCallPointerFunction2", long.class, long.class, long.class),
-                    getNativeCallPointerFunction2Offset());
-            nativeEntryOffsetMap.put(
-                    NativeBridge.class.getMethod("nativeCallPointerFunction3", long.class, long.class, long.class, long.class),
-                    getNativeCallPointerFunction3Offset());
-            nativeEntryOffsetMap.put(
-                    NativeBridge.class.getMethod("nativeCallPointerFunction4", long.class, long.class, long.class, long.class, long.class),
-                    getNativeCallPointerFunction4Offset());
-            nativeEntryOffsetMap.put(
                     NativeBridge.class.getMethod("nativeGetJavaVM"),
                     getNativeGetJavaVmOffset());
+
+            // Register callPointerFunction0..4 from base shellcode (embedded in base64)
+            int[][] fixedEntries = {
+                    {0, getNativeCallPointerFunction0Offset()},
+                    {1, getNativeCallPointerFunction1Offset()},
+                    {2, getNativeCallPointerFunction2Offset()},
+                    {3, getNativeCallPointerFunction3Offset()},
+                    {4, getNativeCallPointerFunction4Offset()},
+            };
+            for (int[] entry : fixedEntries) {
+                int n = entry[0];
+                int offset = entry[1];
+                nativeEntryOffsetMap.put(
+                        NativeBridge.class.getMethod(
+                                "nativeCallPointerFunction" + n,
+                                buildCallPointerFunctionParamTypes(n)),
+                        offset);
+            }
+
+            // Dynamically generate callPointerFunction5..getMaxCallPointerFunctionN()
+            int nextOffset = shellcodeBytes.length;
+            int maxN = getMaxCallPointerFunctionN();
+            for (int n = 5; n <= maxN; n++) {
+                byte[] code = generateCallPointerFunctionNCode(n);
+                if (code == null) {
+                    throw new UnsupportedOperationException(
+                            "generateCallPointerFunctionNCode returned null for N=" + n);
+                }
+                if (nextOffset + code.length > pageSize) {
+                    throw new IllegalStateException(
+                            "trampoline page overflow at N=" + n
+                                    + ": baseSize=" + shellcodeBytes.length
+                                    + ", extraSize=" + (nextOffset - shellcodeBytes.length)
+                                    + ", codeSize=" + code.length
+                                    + ", pageSize=" + pageSize);
+                }
+                System.arraycopy(code, 0, trampolinePage, nextOffset, code.length);
+                nativeEntryOffsetMap.put(
+                        NativeBridge.class.getMethod(
+                                "nativeCallPointerFunction" + n,
+                                buildCallPointerFunctionParamTypes(n)),
+                        nextOffset);
+                nextOffset += code.length;
+            }
         } catch (NoSuchMethodException e) {
-            // should not happen
             throw ReflectHelper.unsafeThrow(e);
         }
         return new TrampolineInfo(trampolinePage, nativeEntryOffsetMap);
@@ -164,16 +216,13 @@ public abstract class BaseShellcode {
         if (!NativeHelper.isCurrentRuntime64Bit() && (address & 0xffffffff00000000L) != 0) {
             throw new IllegalArgumentException("address overflow");
         }
-        // make the page writable
         final int pageSize = (int) MemoryAccess.getPageSize();
         try {
             long pageStart = ByteArrayUtils.alignDown(address, pageSize);
             long pageEnd = ByteArrayUtils.alignUp(address + shellcode.length, pageSize);
             Syscall.mprotect(pageStart, pageEnd - pageStart,
                     OsConstants.PROT_READ | OsConstants.PROT_EXEC | OsConstants.PROT_WRITE);
-            // place the hook
             MemoryAccess.pokeByteArray(address, shellcode, 0, shellcode.length);
-            // restore the protection
             Syscall.mprotect(pageStart, pageEnd - pageStart, OsConstants.PROT_READ | OsConstants.PROT_EXEC);
             NativeAccess.clearCache(address, shellcode.length);
         } catch (ErrnoException e) {

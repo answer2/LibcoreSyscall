@@ -129,6 +129,60 @@ public class ShellcodeImpl_X86_64 extends BaseShellcode implements ISimpleInline
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        // Compute size: prefix + register stack loads + extra shuffle + jmp
+        int size = 22; // mov r10,rdx; mov rdi,rcx; mov rsi,r8; mov rdx,r9; mov rcx,[rsp+8]; mov r8,[rsp+16]
+        if (n >= 6) size += 5;  // mov r9, [rsp+24]
+        if (n >= 7) size += (n - 6) * 10; // ldr+str pairs for arg7..argN (each 10 bytes)
+        size += 3;  // jmp r10
+        byte[] code = new byte[size];
+        int off = 0;
+
+        // mov r10, rdx — save function pointer
+        code[off++] = (byte) 0x4C; code[off++] = (byte) 0x8B; code[off++] = (byte) 0xD2;
+        // mov rdi, rcx — arg1
+        code[off++] = 0x48; code[off++] = (byte) 0x8B; code[off++] = (byte) 0xF9;
+        // mov rsi, r8 — arg2
+        code[off++] = 0x49; code[off++] = (byte) 0x8B; code[off++] = (byte) 0xE0;
+        // mov rdx, r9 — arg3
+        code[off++] = 0x49; code[off++] = (byte) 0x8B; code[off++] = (byte) 0xD1;
+        // mov rcx, [rsp+8] — arg4 (first stack arg)
+        code[off++] = 0x48; code[off++] = (byte) 0x8B; code[off++] = 0x4C; code[off++] = 0x24; code[off++] = 0x08;
+        // mov r8, [rsp+16] — arg5
+        code[off++] = 0x4C; code[off++] = (byte) 0x8B; code[off++] = 0x44; code[off++] = 0x24; code[off++] = 0x10;
+
+        if (n >= 6) {
+            // mov r9, [rsp+24] — arg6
+            code[off++] = 0x4C; code[off++] = (byte) 0x8B; code[off++] = 0x4C; code[off++] = 0x24; code[off++] = 0x18;
+        }
+
+        // Shuffle extra stack args (arg7..argN) into target stack positions
+        // For each argK (K >= 7):
+        //   JNI position: [rsp + (K-3)*8]  — consume from JNI stack
+        //   Target position: [rsp + (K-7)*8] — write to target stack (overwrites arg4..arg6 slots already in regs)
+        for (int k = 7; k <= n; k++) {
+            int srcDisp = (k - 3) * 8;   // offset in JNI frame
+            int dstDisp = (k - 7) * 8;   // offset in target frame
+            // mov rax, [rsp + srcDisp]
+            code[off++] = 0x48; code[off++] = (byte) 0x8B; code[off++] = 0x44; code[off++] = 0x24;
+            code[off++] = (byte) srcDisp;
+            // mov [rsp + dstDisp], rax
+            code[off++] = 0x48; code[off++] = (byte) 0x89; code[off++] = 0x44; code[off++] = 0x24;
+            code[off++] = (byte) dstDisp;
+        }
+
+        // jmp r10 — call function (LR/JNI return address stays on stack)
+        code[off++] = 0x41; code[off++] = (byte) 0xFF; code[off++] = (byte) 0xE2;
+        return code;
+    }
+
+    @Override
     public int getNativeGetJavaVmOffset() {
         return 0x0120;
     }

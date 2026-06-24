@@ -128,6 +128,72 @@ public class ShellcodeImpl_Mips32el extends BaseShellcode implements ISimpleInli
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    /**
+     * Generate MIPS32 (o32 ABI) shellcode for nativeCallPointerFunctionN with N args (N >= 5).
+     *
+     * MIPS32 o32 ABI:
+     *   $4-$7 = a0-a3 (first 4 word-size args, or first 2 jlong args)
+     *   Stack for additional args (8-byte aligned for jlong)
+     * JNI entry: $4=env, $5=jclass, $6-$7=func (jlong pair), then stack:
+     *   [$sp+0..7]=arg1 (jlong), [$sp+8..15]=arg2, [$sp+16..23]=arg3, [$sp+24..31]=arg4, ...
+     * Target (void* args, 32-bit each):
+     *   $4=arg1_low, $5=arg2_low, $6=arg3_low, $7=arg4_low
+     *   [$sp+0]=arg5_low, [$sp+4]=arg6_low, ...
+     */
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        int count = 6; // move t4,a2; lw a0..a3 from stack; jr t4
+        if (n > 4) count += (n - 4) * 2; // lw+sw pairs for arg5..argN
+        int[] insns = new int[count];
+        int i = 0;
+
+        // $12=t4(save func), $13=t5(shuffle temp), $29=sp
+        // or rd, rs, $0 → move: (rs << 21) | (rd << 11) | 0x25
+        // lw rt, offset(rs): (0x23<<26) | (rs<<21) | (rt<<16) | (offset & 0xFFFF)
+        // sw rt, offset(rs): (0x2B<<26) | (rs<<21) | (rt<<16) | (offset & 0xFFFF)
+        // jr rs: (rs << 21) | 0x08
+
+        // save function pointer (low word of func in $6)
+        insns[i++] = (6 << 21) | (12 << 11) | 0x25; // move $12, $6  (save func)
+
+        // load first 4 args from JNI stack to target registers
+        // Each arg occupies 8 bytes (jlong) on JNI stack, target wants 32-bit low word
+        insns[i++] = (0x23 << 26) | (29 << 21) | (4 << 16) | 0;      // lw $4, 0($29)    → arg1_low
+        insns[i++] = (0x23 << 26) | (29 << 21) | (5 << 16) | 8;      // lw $5, 8($29)    → arg2_low
+        insns[i++] = (0x23 << 26) | (29 << 21) | (6 << 16) | 16;     // lw $6, 16($29)   → arg3_low
+        insns[i++] = (0x23 << 26) | (29 << 21) | (7 << 16) | 24;     // lw $7, 24($29)   → arg4_low
+
+        // shuffle extra stack args (arg5..argN) from JNI to target
+        // JNI: argK low word at [$sp + (K-1)*8], Target: argK at [$sp + (K-5)*4]
+        for (int k = 5; k <= n; k++) {
+            int srcOff = (k - 1) * 8; // JNI offset for argK low word
+            int dstOff = (k - 5) * 4; // Target stack offset
+            insns[i++] = (0x23 << 26) | (29 << 21) | (13 << 16) | (srcOff & 0xFFFF); // lw $13, srcOff($29)
+            insns[i++] = (0x2B << 26) | (29 << 21) | (13 << 16) | (dstOff & 0xFFFF); // sw $13, dstOff($29)
+        }
+
+        // jr $12  — call function ($12 = saved func ptr)
+        insns[i++] = (12 << 21) | 0x08;
+
+        // Encode
+        byte[] result = new byte[insns.length * 4];
+        for (int j = 0; j < insns.length; j++) {
+            int insn = insns[j];
+            int off = j * 4;
+            result[off] = (byte) (insn & 0xFF);
+            result[off + 1] = (byte) ((insn >> 8) & 0xFF);
+            result[off + 2] = (byte) ((insn >> 16) & 0xFF);
+            result[off + 3] = (byte) (insn >>> 24);
+        }
+        return result;
+    }
+
+    @Override
     public int getFakeStat64Offset() {
         return 0x0378;
     }

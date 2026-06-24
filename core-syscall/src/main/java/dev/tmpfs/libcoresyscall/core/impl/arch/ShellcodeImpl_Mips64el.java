@@ -132,6 +132,81 @@ public class ShellcodeImpl_Mips64el extends BaseShellcode implements ISimpleInli
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    /**
+     * Generate MIPS64 (n64 ABI) shellcode for nativeCallPointerFunctionN with N args (N >= 5).
+     *
+     * MIPS64 n64 ABI:
+     *   $4-$11 = a0-a7 (first 8 integer args)
+     *   Stack for additional args (at positive $sp offsets)
+     * JNI entry: $4=env, $5=jclass, $6=func, $7=arg1, $8=arg2, $9=arg3, $10=arg4, $11=arg5
+     *   [$sp+0]=arg6, [$sp+8]=arg7, [$sp+16]=arg8, [$sp+24]=arg9, ...
+     * Target: $4=arg1..$11=arg8, [$sp+0]=arg9, ...
+     */
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        int count = 7; // move t4,a2; move a0..a4; jr t4
+        if (n >= 6) count++; // ld a5, 0(sp)
+        if (n >= 7) count++; // ld a6, 8(sp)
+        if (n >= 8) count++; // ld a7, 16(sp)
+        if (n > 8) count += (n - 8) * 2; // ld+sd pairs for arg9..argN
+        int[] insns = new int[count];
+        int i = 0;
+
+        // Register numbers: $4=a0,$5=a1,$6=a2($a0..$a7 but $4..$11),
+        // $8=a4,$9=a5,$10=a6,$11=a7, $29=sp, $12=t4(temp), $13=t5(temp)
+        // or rd, rs, $0  →  move rd, rs: (rs << 21) | (rd << 11) | 0x25
+        // ld rt, offset(rs): (0x37<<26) | (rs<<21) | (rt<<16) | (offset & 0xFFFF)
+        // sd rt, offset(rs): (0x3F<<26) | (rs<<21) | (rt<<16) | (offset & 0xFFFF)
+        // jr rs: (rs << 21) | 0x08
+
+        // save function pointer (a2=$6 → t4=$12)
+        insns[i++] = (6 << 21) | (12 << 11) | 0x25; // move $12, $6  (save func)
+
+        // move register args to target positions
+        insns[i++] = (7 << 21) | (4 << 11) | 0x25;  // move $4, $7   (arg1)
+        insns[i++] = (8 << 21) | (5 << 11) | 0x25;  // move $5, $8   (arg2)
+        insns[i++] = (9 << 21) | (6 << 11) | 0x25;  // move $6, $9   (arg3)
+        insns[i++] = (10 << 21) | (7 << 11) | 0x25; // move $7, $10  (arg4)
+        insns[i++] = (11 << 21) | (8 << 11) | 0x25; // move $8, $11  (arg5)
+
+        // load stack register args (arg6..arg8)
+        if (n >= 6) insns[i++] = (0x37 << 26) | (29 << 21) | (9 << 16) | 0;     // ld $9, 0($29)    → arg6
+        if (n >= 7) insns[i++] = (0x37 << 26) | (29 << 21) | (10 << 16) | 8;   // ld $10, 8($29)   → arg7
+        if (n >= 8) insns[i++] = (0x37 << 26) | (29 << 21) | (11 << 16) | 16;  // ld $11, 16($29)  → arg8
+
+        // shuffle extra stack args (arg9..argN)
+        // JNI: argK at [$sp + (K-6)*8], target: argK at [$sp + (K-9)*8]
+        for (int k = 9; k <= n; k++) {
+            int srcOff = (k - 6) * 8;
+            int dstOff = (k - 9) * 8;
+            // ld $13, srcOff($29)  → load argK
+            insns[i++] = (0x37 << 26) | (29 << 21) | (13 << 16) | (srcOff & 0xFFFF);
+            // sd $13, dstOff($29)  → store to target slot
+            insns[i++] = (0x3F << 26) | (29 << 21) | (13 << 16) | (dstOff & 0xFFFF);
+        }
+
+        // jr $12  — call function ($12 = saved func ptr)
+        insns[i++] = (12 << 21) | 0x08;
+
+        // Encode
+        byte[] result = new byte[insns.length * 4];
+        for (int j = 0; j < insns.length; j++) {
+            int insn = insns[j];
+            int off = j * 4;
+            result[off] = (byte) (insn & 0xFF);
+            result[off + 1] = (byte) ((insn >> 8) & 0xFF);
+            result[off + 2] = (byte) ((insn >> 16) & 0xFF);
+            result[off + 3] = (byte) (insn >>> 24);
+        }
+        return result;
+    }
+
+    @Override
     public int getFakeStat64Offset() {
         return 0x0358;
     }

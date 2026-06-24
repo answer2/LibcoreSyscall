@@ -43,6 +43,28 @@ public class NativeBridge {
 
     public static native long nativeCallPointerFunction4(long function, long arg1, long arg2, long arg3, long arg4);
 
+    public static native long nativeCallPointerFunction5(long function, long arg1, long arg2, long arg3, long arg4, long arg5);
+
+    public static native long nativeCallPointerFunction6(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6);
+
+    public static native long nativeCallPointerFunction7(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7);
+
+    public static native long nativeCallPointerFunction8(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8);
+
+    public static native long nativeCallPointerFunction9(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9);
+
+    public static native long nativeCallPointerFunction10(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10);
+
+    public static native long nativeCallPointerFunction11(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10, long arg11);
+
+    public static native long nativeCallPointerFunction12(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12);
+
+    public static native long nativeCallPointerFunction13(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12, long arg13);
+
+    public static native long nativeCallPointerFunction14(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12, long arg13, long arg14);
+
+    public static native long nativeCallPointerFunction15(long function, long arg1, long arg2, long arg3, long arg4, long arg5, long arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12, long arg13, long arg14, long arg15);
+
     public static native long nativeGetJavaVM();
 
     public static long getPageSize() {

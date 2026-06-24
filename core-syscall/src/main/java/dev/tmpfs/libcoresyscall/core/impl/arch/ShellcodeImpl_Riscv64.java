@@ -116,6 +116,83 @@ public class ShellcodeImpl_Riscv64 extends BaseShellcode implements ISimpleInlin
     }
 
     @Override
+    public int getMaxCallPointerFunctionN() {
+        return 15;
+    }
+
+    /**
+     * Generate RV64 shellcode for nativeCallPointerFunctionN with N arguments (N >= 5).
+     *
+     * RV64 ABI:
+     *   a0-a7 (x10-x17): first 8 integer args
+     *   sp: stack pointer, additional args at positive sp offsets
+     * JNI entry: a0=env, a1=jclass, a2=func, a3=arg1, a4=arg2, a5=arg3, a6=arg4, a7=arg5
+     *   [sp+0]=arg6, [sp+8]=arg7, [sp+16]=arg8, [sp+24]=arg9, ...
+     * Target: a0=arg1..a7=arg8, [sp+0]=arg9, [sp+8]=arg10, ...
+     */
+    @Override
+    public byte[] generateCallPointerFunctionNCode(int n) {
+        if (n < 5 || n > 15) return null;
+        // Compute instruction count
+        int count = 7; // mv t0,a2; mv a0,a3; mv a1,a4; mv a2,a5; mv a3,a6; mv a4,a7; jr t0
+        if (n >= 6) count++; // ld a5, 0(sp)
+        if (n >= 7) count++; // ld a6, 8(sp)
+        if (n >= 8) count++; // ld a7, 16(sp)
+        if (n > 8) count += (n - 8) * 2; // ld+sd pairs for arg9..argN
+        int[] insns = new int[count];
+        int i = 0;
+
+        // Register numbers: a0=10, a1=11, a2=12, a3=13, a4=14, a5=15, a6=16, a7=17
+        // t0=5, t1=6, sp=2
+        // addi rd, rs1, 0  →  mv rd, rs1: (rs1 << 15) | (rd << 7) | 0x13
+        // ld rd, offset(sp): (offset << 20) | (2 << 15) | (3 << 12) | (rd << 7) | 0x03
+        // sd rs2, offset(sp): ((offset>>5)<<25) | (rs2<<20) | (2<<15) | (3<<12) | ((offset&0x1F)<<7) | 0x23
+        // jr rs1: (rs1 << 15) | 0x67
+
+        // save function pointer (a2=x12 → t0=x5)
+        insns[i++] = (12 << 15) | (5 << 7) | 0x13; // mv t0, a2
+
+        // move register args to target positions
+        insns[i++] = (13 << 15) | (10 << 7) | 0x13; // mv a0, a3  (arg1)
+        insns[i++] = (14 << 15) | (11 << 7) | 0x13; // mv a1, a4  (arg2)
+        insns[i++] = (15 << 15) | (12 << 7) | 0x13; // mv a2, a5  (arg3)
+        insns[i++] = (16 << 15) | (13 << 7) | 0x13; // mv a3, a6  (arg4)
+        insns[i++] = (17 << 15) | (14 << 7) | 0x13; // mv a4, a7  (arg5)
+
+        // load stack register args (arg6..arg8)
+        if (n >= 6) insns[i++] = (0 << 20) | (2 << 15) | (3 << 12) | (15 << 7) | 0x03;  // ld a5, 0(sp)
+        if (n >= 7) insns[i++] = (8 << 20) | (2 << 15) | (3 << 12) | (16 << 7) | 0x03;  // ld a6, 8(sp)
+        if (n >= 8) insns[i++] = (16 << 20) | (2 << 15) | (3 << 12) | (17 << 7) | 0x03; // ld a7, 16(sp)
+
+        // shuffle extra stack args (arg9..argN)
+        // JNI: argK at [sp + (K-6)*8], target: argK at [sp + (K-9)*8]
+        for (int k = 9; k <= n; k++) {
+            int srcOff = (k - 6) * 8;
+            int dstOff = (k - 9) * 8;
+            // ld t1, srcOff(sp)  → load argK
+            insns[i++] = (srcOff << 20) | (2 << 15) | (3 << 12) | (6 << 7) | 0x03;
+            // sd t1, dstOff(sp)  → store to target slot
+            insns[i++] = ((dstOff >> 5) << 25) | (6 << 20) | (2 << 15) | (3 << 12)
+                    | ((dstOff & 0x1F) << 7) | 0x23;
+        }
+
+        // jr t0  — call function (ra preserved → JNI return path)
+        insns[i++] = (5 << 15) | 0x67;
+
+        // Encode instructions to byte array
+        byte[] result = new byte[insns.length * 4];
+        for (int j = 0; j < insns.length; j++) {
+            int insn = insns[j];
+            int off = j * 4;
+            result[off] = (byte) (insn & 0xFF);
+            result[off + 1] = (byte) ((insn >> 8) & 0xFF);
+            result[off + 2] = (byte) ((insn >> 16) & 0xFF);
+            result[off + 3] = (byte) (insn >>> 24);
+        }
+        return result;
+    }
+
+    @Override
     public int getNativeGetJavaVmOffset() {
         return 0x0072;
     }
